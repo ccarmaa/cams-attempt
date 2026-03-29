@@ -197,13 +197,19 @@ tcp_close(struct socket * sock)
 
 
 
-
+// aka tcp packet recieve
+// called everytime a packet arrives from the network
 int 
 tcp_pkt_rx(struct packet * pkt)
 {
     if (pkt->layer_3_type == IPV4_PKT) {
    
         // Handle IPV4 Packet
+        struct tcp_raw_hdr * tcp_hdr = NULL;
+        tcp_hdr = __get_tcp_hdr(pkt);
+
+        pet_printf("tcp packet received:\n");
+        print_tcp_header(tcp_hdr);
 
     }
 
