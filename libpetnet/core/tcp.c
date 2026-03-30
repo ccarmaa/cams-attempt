@@ -158,6 +158,86 @@ err:
     return -1;
 }
 
+
+// same as _send_syn_ack, but we are just setting the ack flag, no syn flag. purely acknowedging the recieved data
+static int __send_ack(struct tcp_connection * con, struct ipv4_addr * remote_addr, uint16_t remote_port){
+    struct packet      * pkt      = NULL;
+    struct tcp_raw_hdr * tcp_hdr  = NULL;
+    uint16_t             checksum = 0;
+
+    pkt     = create_empty_packet();
+    tcp_hdr = __make_tcp_hdr(pkt, 0); // allocate mem inside packet for tcp header
+
+    // fill in tcp header fields
+    tcp_hdr->src_port   = htons(con->ipv4_tuple.local_port);
+    tcp_hdr->dst_port   = htons(remote_port);
+    tcp_hdr->seq_num    = htonl(con->snd_nxt);
+    tcp_hdr->ack_num    = htonl(con->rcv_nxt);
+    tcp_hdr->header_len = sizeof(struct tcp_raw_hdr) / 4;
+    tcp_hdr->flags.ACK  = 1;
+    tcp_hdr->recv_win   = htons(65535);
+    tcp_hdr->checksum   = 0;
+
+    // synack has no payload
+    pkt->payload     = NULL;
+    pkt->payload_len = 0;
+
+    // calc checksum
+    checksum          = __calculate_chksum(con, remote_addr, pkt);
+    tcp_hdr->checksum = checksum;
+
+    if (ipv4_pkt_tx(pkt, remote_addr) != 0) {
+        log_error("failed to send ack\n");
+        goto err;
+    }
+
+    return 0;
+
+err:
+    if (pkt) free_packet(pkt);
+    return -1;
+}
+
+// same as _send_ack, but we are setting the fin flag as well
+static int __send_fin_ack(struct tcp_connection * con, struct ipv4_addr * remote_addr, uint16_t remote_port){
+    struct packet      * pkt      = NULL;
+    struct tcp_raw_hdr * tcp_hdr  = NULL;
+    uint16_t             checksum = 0;
+
+    pkt     = create_empty_packet();
+    tcp_hdr = __make_tcp_hdr(pkt, 0); // allocate mem inside packet for tcp header
+
+    // fill in tcp header fields
+    tcp_hdr->src_port   = htons(con->ipv4_tuple.local_port);
+    tcp_hdr->dst_port   = htons(remote_port);
+    tcp_hdr->seq_num    = htonl(con->snd_nxt);
+    tcp_hdr->ack_num    = htonl(con->rcv_nxt);
+    tcp_hdr->header_len = sizeof(struct tcp_raw_hdr) / 4;
+    tcp_hdr->flags.ACK  = 1;
+    tcp_hdr->flags.FIN  = 1;
+    tcp_hdr->recv_win   = htons(65535);
+    tcp_hdr->checksum   = 0;
+
+    // synack has no payload
+    pkt->payload     = NULL;
+    pkt->payload_len = 0;
+
+    // calc checksum
+    checksum          = __calculate_chksum(con, remote_addr, pkt);
+    tcp_hdr->checksum = checksum;
+
+    if (ipv4_pkt_tx(pkt, remote_addr) != 0) {
+        log_error("failed to send fin-ack\n");
+        goto err;
+    }
+
+    return 0;
+
+err:
+    if (pkt) free_packet(pkt);
+    return -1;
+}
+
 pet_json_obj_t
 tcp_hdr_to_json(struct tcp_raw_hdr * hdr)
 {
@@ -380,6 +460,31 @@ tcp_pkt_rx(struct packet * pkt)
             con->con_state = ESTABLISHED;
             pet_printf("ACK received, connection ESTABLISHED\n");
         }
+
+        // if we are in ESTABLISHED state and receive data 
+        if (con->con_state == ESTABLISHED && pkt->payload_len > 0) {
+            con->rcv_nxt = con->rcv_nxt + pkt->payload_len;
+            __send_ack(con, src_ip, src_port);
+            pet_printf("data received, sent ACK\n");
+        }
+
+        // if we are in ESTABLISHED state and receive a FIN
+        if (con->con_state == ESTABLISHED && tcp_hdr->flags.FIN) {
+            con->rcv_nxt   = con->rcv_nxt + 1;
+            __send_fin_ack(con, src_ip, src_port);
+            con->snd_nxt   = con->snd_nxt + 1;
+            con->con_state = LAST_ACK;
+            pet_printf("FIN received, sent FIN-ACK, moving to LAST_ACK\n");
+        }
+
+        // if we are in LAST_ACK state and receive an ACK (aka the final ACK of the three way handshake)
+        if (con->con_state == LAST_ACK && tcp_hdr->flags.ACK) {
+            con->con_state = CLOSED;
+            pet_printf("final ACK received, connection CLOSED\n");
+        }
+
+
+
 // cleanup
 out:
         if (con)    put_and_unlock_tcp_con(con);
