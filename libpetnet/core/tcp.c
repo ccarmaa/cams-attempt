@@ -465,6 +465,7 @@ tcp_pkt_rx(struct packet * pkt)
         // if we are in ESTABLISHED state and receive data 
         if (con->con_state == ESTABLISHED && pkt->payload_len > 0) {
             con->rcv_nxt = con->rcv_nxt + pkt->payload_len;
+            pet_socket_received_data(con->sock, pkt->payload, pkt->payload_len);
             __send_ack(con, src_ip, src_port);
             pet_printf("data received, sent ACK\n");
         }
