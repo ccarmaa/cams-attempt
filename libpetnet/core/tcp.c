@@ -458,6 +458,7 @@ tcp_pkt_rx(struct packet * pkt)
         if (con->con_state == SYN_RCVD && tcp_hdr->flags.ACK) {
             con->snd_nxt   = con->snd_nxt + 1;
             con->con_state = ESTABLISHED;
+            pet_socket_accepted(con->sock, src_ip, src_port); // wakes up apps accept call and tells it new conn has arrived
             pet_printf("ACK received, connection ESTABLISHED\n");
         }
 
