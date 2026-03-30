@@ -69,6 +69,15 @@ struct tcp_connection {
 
 
     tcp_con_state_t con_state;
+    
+    uint32_t snd_nxt;
+    uint32_t rcv_nxt;
+    uint32_t snd_una;
+
+    uint16_t local_port;
+    uint16_t remote_port;
+
+    int fin_pending;
 
 
 };
