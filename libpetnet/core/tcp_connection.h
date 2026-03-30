@@ -69,7 +69,7 @@ struct tcp_connection {
 
 
     tcp_con_state_t con_state;
-    
+
     uint32_t snd_nxt;
     uint32_t rcv_nxt;
     uint32_t snd_una;
@@ -78,6 +78,8 @@ struct tcp_connection {
     uint16_t remote_port;
 
     int fin_pending;
+
+    struct ipv4_addr * remote_ip;
 
 
 };

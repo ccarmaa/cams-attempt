@@ -528,6 +528,9 @@ tcp_pkt_rx(struct packet * pkt)
         // initially stored in tcp_listen() for LISTEN,
         // since we didn't know remote side at listen time
         zero_ip = ipv4_addr_from_str("0.0.0.0");
+
+
+
         con = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,
                                             dst_ip,
                                             zero_ip,
@@ -536,6 +539,8 @@ tcp_pkt_rx(struct packet * pkt)
         
         free_ipv4_addr(zero_ip); // done with it now b/c get_and_lock creates internal copy
         zero_ip = NULL;
+
+        
 
         // copied from udp.c
         if (con == NULL) { // print statement modified to suit TCP
@@ -562,8 +567,21 @@ tcp_pkt_rx(struct packet * pkt)
 
         // now we wait for ack (after we just sent syn-ack)
         if (con->con_state == SYN_RCVD && tcp_hdr->flags.ACK) {
-            con->snd_nxt   = con->snd_nxt + 1;
-            con->con_state = ESTABLISHED; // connection established
+            struct socket * new_sock = NULL;
+
+            con->snd_nxt     = con->snd_nxt + 1;
+            con->con_state   = ESTABLISHED;
+            con->remote_ip   = ipv4_addr_clone(src_ip);
+            con->remote_port = src_port;
+            con->local_port  = dst_port;
+
+            new_sock = pet_socket_accepted(con->sock, src_ip, src_port);
+
+            if (new_sock != NULL) {
+                add_sock_to_tcp_con(tcp_state->con_map, con, new_sock);
+                pet_put_socket(new_sock);
+            }
+
             pet_printf("ack received, connection established\n");
         }
 
@@ -574,6 +592,8 @@ tcp_pkt_rx(struct packet * pkt)
         // (done in __send_ack)
         if (con->con_state == ESTABLISHED && pkt->payload_len > 0) {
             con->rcv_nxt = con->rcv_nxt + pkt->payload_len; // important
+            pet_socket_received_data(con->sock, pkt->payload, pkt->payload_len);
+
             __send_ack(con, src_ip, src_port);
             pet_printf("data received, sent ack\n");
         }
@@ -588,6 +608,8 @@ tcp_pkt_rx(struct packet * pkt)
 
         if (con->con_state == LAST_ACK && tcp_hdr->flags.ACK) {
             con->con_state = CLOSED;
+            remove_tcp_con(tcp_state->con_map, con);
+            pet_socket_closed(con->sock);
             pet_printf("final ack received, state -> CLOSED\n");
         }
 
