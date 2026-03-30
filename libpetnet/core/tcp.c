@@ -481,6 +481,8 @@ tcp_pkt_rx(struct packet * pkt)
         // if we are in LAST_ACK state and receive an ACK (aka the final ACK of the three way handshake)
         if (con->con_state == LAST_ACK && tcp_hdr->flags.ACK) {
             con->con_state = CLOSED;
+            remove_tcp_con(tcp_state->con_map, con);
+            pet_socket_closed(con->sock);
             pet_printf("final ACK received, connection CLOSED\n");
         }
 
