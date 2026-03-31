@@ -350,6 +350,58 @@ err:
     return -1;
 }
 
+// helper function. same as send_syn_ack but without the ack
+static int
+__send_syn(struct tcp_connection * con,
+               struct ipv4_addr      * remote_addr,
+               uint16_t                remote_port)
+{
+    struct packet       * pkt       = NULL;
+    struct tcp_raw_hdr  * tcp_hdr   = NULL;
+    uint16_t checksum               = 0;
+
+    // create empty packet 
+    pkt     = create_empty_packet();
+    tcp_hdr = __make_tcp_hdr(pkt, 0);
+
+    // fill in TCP header fields
+    // more info in section 3.7 https://datatracker.ietf.org/doc/html/rfc793
+    tcp_hdr->src_port   = htons(con->ipv4_tuple.local_port); // our port
+    tcp_hdr->dst_port   = htons(remote_port); // remote port
+    tcp_hdr->seq_num    = htonl(con->snd_nxt); // sender keeps track of next seq num to use
+    tcp_hdr->ack_num    = 0; // not used in SYN, set to 0
+    
+    // header_len stores number of 32 bit (4 byte) words 
+    // sizeof(struct tcp_raw_hdr) will be in bytes
+    // divide by 4 to get however many # of 4-byte words we have
+    tcp_hdr->header_len = sizeof(struct tcp_raw_hdr) / 4; // convert from bytes to words by dividing by 4
+    tcp_hdr->flags.SYN  = 1;
+    // use max receive for now ***
+    tcp_hdr->recv_win   = htons(65535); // = 2^16 - 1 = max value of uint16_t = max receive
+    tcp_hdr->checksum   = 0; // checksum field must be 0 before calculating
+
+    // syn ack doesn't have payload
+    pkt->payload     = NULL;
+    pkt->payload_len = 0;
+
+    checksum = __calculate_chksum(con, remote_addr, pkt);
+    tcp_hdr->checksum = checksum;
+
+    // give packet to ipv4 layer for transmission
+    // ipv4 layer handles everything below tcp
+    if (ipv4_pkt_tx(pkt, remote_addr) != 0) {
+        log_error("Failed to send SYN ACK\n");
+        goto err;
+    }
+
+    return 0;
+
+err:
+    // we need to free packet if ipv4_pkt_tx fails
+    // otherwise it's freed on success 
+    if (pkt) free_packet(pkt); 
+    return -1;
+}
 
 
 pet_json_obj_t
@@ -474,7 +526,8 @@ err:
     return -1;
 }
 
-
+// what is called when app calls petnet_connect()
+// lowk same as tcp_listen but we move to SYN_SENT state instead of LISTEN and we send a SYN instead of just waiting for one
 int 
 tcp_connect_ipv4(struct socket    * sock, 
                  struct ipv4_addr * local_addr, 
@@ -482,10 +535,60 @@ tcp_connect_ipv4(struct socket    * sock,
                  struct ipv4_addr * remote_addr,
                  uint16_t           remote_port)
 {
+    // get TCP module's global state (w/ connection map)
+    // hashtable: IP tuples to tcp_connection objects
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
 
-    (void)tcp_state; // delete me
-    pet_printf("tcp_connect_ipv4\n"); /// 
+    /// 2.) implement tcp_listen in tcp.c
+    // copied code from udp.c (udp_bind)
+    struct tcp_connection * con = NULL;
+    // remote_ip is 0.0.0.0 because we don't know who will connect yet
+    struct ipv4_addr      * remote_ip  = ipv4_addr_from_str("0.0.0.0");
+
+    /// 1.) add print statements to all 5 method stubs in tcp.c: 
+    // tcp_listen, tcp_connect_ipv4, tcp_send, tcp_close, tcp_pkt_rx
+    pet_printf("tcp_connect_ipv4 entered\n");
+
+    // create new connection object
+    // set parameters remote_ip and remote_port to NULL and 
+    // ipv4_addr_from_str("0.0.0.0")
+    // because we are just listening right now,
+    // we don't know who will connect
+    con = create_ipv4_tcp_con(tcp_state->con_map, local_addr, remote_ip, local_port, 0);
+    
+    // free immediately, create_ipv4_tcp_con in tcp_connection.c creates internal copy
+    free_ipv4_addr(remote_ip);
+    remote_ip = NULL;
+
+    // if err, create_ipv4_tcp_con returns null
+    if (con == NULL) {
+        pet_socket_error(sock, EINVAL);
+        goto err;
+    }
+
+    // associate the socket with this connection so 
+    // that we can look up this connection later
+    // using the socket pointer (tcp_send, tcp_close)
+    add_sock_to_tcp_con(tcp_state->con_map, con, sock);
+
+    con->con_state = SYN_SENT; // we sent a SYN, waiting for SYN-ACK
+    con->snd_nxt = 4242;
+    con->remote_ip = ipv4_addr_clone(remote_addr); 
+    con->remote_port = remote_port; 
+    con->local_port = local_port; 
+
+    __send_syn(con, remote_addr, remote_port); // send SYN to kick off the handshake
+
+
+    // unlock and release the reference before returning
+    put_and_unlock_tcp_con(con);
+
+    return 0;
+
+err:
+
+    if (con) put_and_unlock_tcp_con(con);
+    
     return -1;
 }
 
@@ -651,6 +754,20 @@ tcp_pkt_rx(struct packet * pkt)
 
             // next state = we wait for ack to complete handshake
             con->con_state = SYN_RCVD;
+        }
+
+        // we sent a SYN and are waiting for SYN-ACK
+        // we are in active open (3-way handshake)
+        if (con->con_state == SYN_SENT && tcp_hdr->flags.SYN && tcp_hdr->flags.ACK) {
+
+            con->rcv_nxt = ntohl(tcp_hdr->seq_num) + 1;
+            con->snd_nxt = con->snd_nxt + 1;
+            con->con_state = ESTABLISHED;
+
+            __send_ack(con, src_ip, src_port); // send final ACK to complete handshake
+
+            pet_socket_connected(con->sock); // tell socket layer connection is ready
+            pet_printf("SYN-ACK received, sent ACK, connection ESTABLISHED\n");
         }
 
         // now we wait for ack (after we just sent syn-ack)
