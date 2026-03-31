@@ -281,6 +281,77 @@ err:
     return -1;
 }
 
+
+/// 8.) helper function to send data packet
+// modified other send funcs
+static int
+__send_data_pkt(struct tcp_connection * con)
+{
+    struct packet       * pkt       = NULL;
+    struct tcp_raw_hdr  * tcp_hdr   = NULL;
+    uint16_t checksum               = 0;
+    uint32_t data_len               = 0;
+
+    // checks how much data is waiting in sockets send buffer
+    data_len = pet_socket_send_capacity(con->sock);
+
+    if (data_len == 0) {
+        return 0;
+    }
+
+    // create empty packet 
+    pkt     = create_empty_packet();
+    tcp_hdr = __make_tcp_hdr(pkt, 0);
+
+    // fill in TCP header fields
+    // more info in section 3.7 https://datatracker.ietf.org/doc/html/rfc793
+    tcp_hdr->src_port   = htons(con->local_port); // our port
+    tcp_hdr->dst_port   = htons(con->remote_port); // remote port
+    tcp_hdr->seq_num    = htonl(con->snd_nxt); // sender keeps track of next seq num to use
+    tcp_hdr->ack_num    = htonl(con->rcv_nxt); // rcv_nxt 
+    
+    // header_len stores number of 32 bit (4 byte) words 
+    // sizeof(struct tcp_raw_hdr) will be in bytes
+    // divide by 4 to get however many # of 4-byte words we have
+    tcp_hdr->header_len = sizeof(struct tcp_raw_hdr) / 4; // convert from bytes to words by dividing by 4
+    tcp_hdr->flags.ACK  = 1;
+
+    // use max receive for now ***
+    tcp_hdr->recv_win   = htons(65535); // = 2^16 - 1 = max value of uint16_t = max receive
+    tcp_hdr->checksum   = 0; // checksum field must be 0 before calculating
+
+    // ack doesn't have payload
+    pkt->payload     = pet_malloc(data_len);
+    pkt->payload_len = data_len;
+
+    // pulls data out of sockets send buff and copies it into packets payload
+    pet_socket_sending_data(con->sock, pkt->payload, data_len);
+
+    // advances seq # by how many bytes we sent
+    con->snd_nxt = con->snd_nxt + data_len;
+
+    checksum = __calculate_chksum(con, con->remote_ip, pkt);
+
+    tcp_hdr->checksum = checksum;
+
+    // give packet to ipv4 layer for transmission
+    // ipv4 layer handles everything below tcp
+    if (ipv4_pkt_tx(pkt, con->remote_ip) != 0) {    
+        log_error("Failed to send data packet\n");
+        goto err;
+    }
+
+    return 0;
+
+err:
+    // we need to free packet if ipv4_pkt_tx fails
+    // otherwise it's freed on success 
+    if (pkt) free_packet(pkt); 
+    return -1;
+}
+
+
+
 pet_json_obj_t
 tcp_hdr_to_json(struct tcp_raw_hdr * hdr)
 {
@@ -425,21 +496,24 @@ int
 tcp_send(struct socket * sock)
 {
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
-    // struct tcp_connection * con       = get_and_lock_tcp_con_from_sock(tcp_state->con_map, sock);
+    struct tcp_connection * con       = get_and_lock_tcp_con_from_sock(tcp_state->con_map, sock);
 
-    (void)tcp_state; // delete me
     pet_printf("tcp_send\n"); // 
+    if (con == NULL) {
+        log_error("could not find TCP connection (called from tcp_send)\n");
+        return -1;
+    }
 
-//     if (con->con_state != ESTABLISHED) {
-//         log_error("TCP Connection is not established\n");
-//         goto err;
-//     }
-//     __send_data_pkt(con);
-//     put_and_unlock_tcp_con(con);
-//     return 0;
+    if (con->con_state != ESTABLISHED) {
+        log_error("TCP Connection is not established\n");
+        goto err;
+    }
+    __send_data_pkt(con);
+    put_and_unlock_tcp_con(con);
+    return 0;
 
-// err:
-//     if (con) put_and_unlock_tcp_con(con);
+err:
+    if (con) put_and_unlock_tcp_con(con);
     return -1;
 }
 
