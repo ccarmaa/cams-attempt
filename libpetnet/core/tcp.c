@@ -524,9 +524,23 @@ int
 tcp_close(struct socket * sock)
 {
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
-  
-    (void)tcp_state; // delete me
+    struct tcp_connection * con       = get_and_lock_tcp_con_from_sock(tcp_state->con_map, sock);
+
     pet_printf("tcp_close\n");
+
+    if (con == NULL) {
+        log_error("could not find TCP connection (called from tcp_close)\n");
+        return -1;
+    }
+
+    if (con->con_state == ESTABLISHED){
+        __send_fin_ack(con, con->remote_ip, con->remote_port);
+        con->snd_nxt = con->snd_nxt + 1; // fin uses 1 seq number
+        con->con_state = FIN_WAIT1; // i think i must check
+        pet_printf("sent FIN, moved to FIN_WAIT1\n");
+    }
+
+    put_and_unlock_tcp_con(con);
     return 0;
 }
 
@@ -685,6 +699,20 @@ tcp_pkt_rx(struct packet * pkt)
             remove_tcp_con(tcp_state->con_map, con);
             pet_socket_closed(con->sock);
             pet_printf("final ack received, state -> CLOSED\n");
+        }
+
+        if (con->con_state == FIN_WAIT1 && tcp_hdr->flags.ACK) {
+            con->con_state = FIN_WAIT2;
+            pet_printf("FIN ACKed, moving to FIN_WAIT2\n");
+        }
+
+        if (con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN) {
+            con->rcv_nxt   = con->rcv_nxt + 1;
+            __send_ack(con, src_ip, src_port);
+            con->con_state = CLOSED;
+            remove_tcp_con(tcp_state->con_map, con);
+            pet_socket_closed(con->sock);
+            pet_printf("received FIN, sent ACK, connection CLOSED\n");
         }
 
 out: 
