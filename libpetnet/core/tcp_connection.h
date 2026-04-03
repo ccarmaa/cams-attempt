@@ -73,7 +73,9 @@ struct tcp_connection {
 
 	int fin_pending;
 
-	struct ipv4_addr * remote_ip;
+	struct ipv4_addr *	 remote_ip;
+	struct pet_timeout * timeout;
+	int					 timed_out;
 };
 
 
