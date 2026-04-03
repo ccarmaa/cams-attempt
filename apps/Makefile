@@ -23,6 +23,9 @@ execs := listen_server      \
 		 send_server  \
 		 recv_server  \
 		 simple_server  \
+		 http_client_petnet \
+         http_server1_petnet \
+         http_server2_petnet \
 
 libs := -lpetnet -lpthread -lrt -lunwind
 

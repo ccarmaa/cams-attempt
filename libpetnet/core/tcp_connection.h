@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (c) 2020, Jack Lange <jacklange@cs.pitt.edu>
  * All rights reserved.
  *
@@ -22,177 +22,161 @@ struct socket;
 struct tcp_con_map;
 
 
-
-typedef enum { CLOSED      = 0,
-               LISTEN      = 1,
-               SYN_RCVD    = 2,
-               SYN_SENT    = 3, 
-               ESTABLISHED = 4,
-               CLOSE_WAIT  = 5,
-               FIN_WAIT1   = 6,
-               CLOSING     = 7,
-               LAST_ACK    = 8,
-               FIN_WAIT2   = 9,
-               TIME_WAIT   = 10 } tcp_con_state_t;
+typedef enum { CLOSED	   = 0,
+			   LISTEN	   = 1,
+			   SYN_RCVD	   = 2,
+			   SYN_SENT	   = 3,
+			   ESTABLISHED = 4,
+			   CLOSE_WAIT  = 5,
+			   FIN_WAIT1   = 6,
+			   CLOSING	   = 7,
+			   LAST_ACK	   = 8,
+			   FIN_WAIT2   = 9,
+			   TIME_WAIT   = 10 } tcp_con_state_t;
 
 
 struct tcp_con_ipv4_tuple {
-    struct ipv4_addr * local_ip;
-    struct ipv4_addr * remote_ip;
-    uint16_t           local_port;
-    uint16_t           remote_port;
+	struct ipv4_addr * local_ip;
+	struct ipv4_addr * remote_ip;
+	uint16_t		   local_port;
+	uint16_t		   remote_port;
 };
-
 
 
 struct tcp_connection {
-    
-    ip_net_type_t net_type;
+	ip_net_type_t net_type;
 
-    union {
-        struct tcp_con_ipv4_tuple ipv4_tuple;
-    };
+	union {
+		struct tcp_con_ipv4_tuple ipv4_tuple;
+	};
 
-    int ref_cnt;
+	int ref_cnt;
 
-    pthread_mutex_t con_lock;
+	pthread_mutex_t con_lock;
 
-    struct socket * sock;
-
+	struct socket * sock;
 
 
-
-    /* **********************
-     * Students fill in below 
-     * **********************/
-
+	/* **********************
+	 * Students fill in below
+	 * **********************/
 
 
-    tcp_con_state_t con_state;
+	tcp_con_state_t con_state;
 
-    uint32_t snd_nxt;
-    uint32_t rcv_nxt;
-    uint32_t snd_una;
+	uint32_t snd_nxt;
+	uint32_t rcv_nxt;
+	uint32_t snd_una;
 
-    uint16_t local_port;
-    uint16_t remote_port;
+	uint16_t local_port;
+	uint16_t remote_port;
 
-    int fin_pending;
+	int fin_pending;
 
-    struct ipv4_addr * remote_ip;
-
-
+	struct ipv4_addr * remote_ip;
 };
 
 
-
-
 /*
- * Returns a locked reference to a TCP connection object corresponding to a socket 
- *   The pointer behaves like a normal pointer, but you cannot free it. 
+ * Returns a locked reference to a TCP connection object corresponding to a socket
+ *   The pointer behaves like a normal pointer, but you cannot free it.
  *   You must unlock and release the reference before returning
- * 
+ *
  * Returns NULL on error
  */
-struct tcp_connection * 
+struct tcp_connection *
 get_and_lock_tcp_con_from_sock(struct tcp_con_map * map,
-                               struct socket      * socket);
+							   struct socket *		socket);
 
 /*
- * Returns a locked reference to a TCP connection object corresponding to a IPV4 tuple 
- *   The pointer behaves like a normal pointer, but you cannot free it. 
+ * Returns a locked reference to a TCP connection object corresponding to a IPV4 tuple
+ *   The pointer behaves like a normal pointer, but you cannot free it.
  *   You must unlock and release the reference before returning
- * 
+ *
  * Returns NULL on error
  */
 struct tcp_connection *
 get_and_lock_tcp_con_from_ipv4(struct tcp_con_map * map,
-                               struct ipv4_addr   * local_ip, 
-                               struct ipv4_addr   * remote_ip,
-                               uint16_t             local_port,
-                               uint16_t             remote_port);
+							   struct ipv4_addr *	local_ip,
+							   struct ipv4_addr *	remote_ip,
+							   uint16_t				local_port,
+							   uint16_t				remote_port);
 
-/* 
+/*
  * Unlocks and releases the reference to a tcp connection object after you are done using it
  */
-void 
-put_and_unlock_tcp_con(struct tcp_connection * con);
+void put_and_unlock_tcp_con(struct tcp_connection * con);
 
 
-/* 
+/*
  * Creates a TCP connection object and returns a locked reference to it
- * 
+ *
  * NOTE: The object returned must be released with put_and_unlock_tcp_con() before returning
- * 
+ *
  *  Returns NULL on error
  */
 struct tcp_connection *
 create_ipv4_tcp_con(struct tcp_con_map * map,
-                    struct ipv4_addr   * local_ip, 
-                    struct ipv4_addr   * remote_ip,
-                    uint16_t             local_port,
-                    uint16_t             remote_port);
+					struct ipv4_addr *	 local_ip,
+					struct ipv4_addr *	 remote_ip,
+					uint16_t			 local_port,
+					uint16_t			 remote_port);
 
 
-/* 
+/*
  * Associate a Socket with a TCP Connection
- *  This also allows searching for a TCP Connection object using its socket pointer 
- * 
+ *  This also allows searching for a TCP Connection object using its socket pointer
+ *
  * Returns 0 on success, -1 on error
  */
-int 
-add_sock_to_tcp_con(struct tcp_con_map    * map,
-                    struct tcp_connection * con, 
-                    struct socket         * new_sock);
+int add_sock_to_tcp_con(struct tcp_con_map *	map,
+						struct tcp_connection * con,
+						struct socket *			new_sock);
 
 
-
-/* 
+/*
  *  Unregister a TCP Connection
  *   After this returns the TCP connection will no longer be accessible via the get_* functions
  */
-void
-remove_tcp_con(struct tcp_con_map    * map,
-               struct tcp_connection * con);
+void remove_tcp_con(struct tcp_con_map *	map,
+					struct tcp_connection * con);
 
 
-
-/* 
+/*
  * Acquire a mutex lock on a TCP connection
- * 
+ *
  * Returns 0 on success, negative number on error
  */
 int lock_tcp_con(struct tcp_connection * con);
 
 
-/* 
+/*
  * Release a mutex lock on a TCP connection
- * 
+ *
  * Returns 0 on success, negative number on error
  */
 int unlock_tcp_con(struct tcp_connection * con);
 
 
-/* 
- * Obtains a new reference to a TCP connection 
- * 
+/*
+ * Obtains a new reference to a TCP connection
+ *
  * Returns the pointer passed as an argument, this allows semantically clean assignment
- * 
- * e.g. 
+ *
+ * e.g.
  * some_persistent_obj->tcp_con = get_tcp_con(tcp_con);
- * 
+ *
  */
 struct tcp_connection *
 get_tcp_con(struct tcp_connection * con);
 
 /*
- * Releases a reference to a TCP connection 
+ * Releases a reference to a TCP connection
  */
-void
-put_tcp_con(struct tcp_connection * con);
+void put_tcp_con(struct tcp_connection * con);
 
 
-/* 
+/*
  * Initializes a TCP Connection Map
  */
 struct tcp_con_map * create_tcp_con_map();
