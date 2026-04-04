@@ -848,9 +848,7 @@ int tcp_pkt_rx(struct packet * pkt)
 		}
 
 		if (con->con_state == LAST_ACK && tcp_hdr->flags.ACK) {
-			struct socket *	   saved_sock = con->sock;
-			struct ipv4_addr * local_ip	  = ipv4_addr_clone(con->ipv4_tuple.local_ip);
-			uint16_t		   local_port = con->ipv4_tuple.local_port;
+			struct socket * saved_sock = con->sock;
 
 			con->con_state = CLOSED;
 			con->sock	   = NULL;
@@ -859,8 +857,6 @@ int tcp_pkt_rx(struct packet * pkt)
 			con = NULL;
 
 			pet_socket_closed(saved_sock);
-			tcp_listen(saved_sock, local_ip, local_port);
-			free_ipv4_addr(local_ip);
 
 
 			pet_printf("final ack received, state -> CLOSED\n");
@@ -873,10 +869,6 @@ int tcp_pkt_rx(struct packet * pkt)
 		}
 
 		if (con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN) {
-			struct socket *	   saved_sock = con->sock;
-			struct ipv4_addr * local_ip	  = ipv4_addr_clone(con->ipv4_tuple.local_ip);
-			uint16_t		   local_port = con->ipv4_tuple.local_port;
-
 			con->rcv_nxt = con->rcv_nxt + 1;
 			__send_ack(con, src_ip, src_port);
 			con->con_state = CLOSED;
@@ -885,8 +877,6 @@ int tcp_pkt_rx(struct packet * pkt)
 			put_and_unlock_tcp_con(con);
 			con = NULL;
 
-			tcp_listen(saved_sock, local_ip, local_port);
-			free_ipv4_addr(local_ip);
 
 			pet_printf("received FIN, sent ACK, connection CLOSED\n");
 			goto out;
