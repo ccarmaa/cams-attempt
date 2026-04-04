@@ -747,17 +747,24 @@ int tcp_pkt_rx(struct packet * pkt)
 		// use 0.0.0.0 for remote because that's what we
 		// initially stored in tcp_listen() for LISTEN,
 		// since we didn't know remote side at listen time
-		zero_ip = ipv4_addr_from_str("0.0.0.0");
-
-
+		// First try exact match (for established connections)
 		con = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,
 											 dst_ip,
-											 zero_ip,
+											 src_ip,
 											 dst_port,
-											 0);
+											 src_port);
 
-		free_ipv4_addr(zero_ip);	// done with it now b/c get_and_lock creates internal copy
-		zero_ip = NULL;
+		// If not found, fall back to wildcard listener lookup (for new SYNs)
+		if (con == NULL) {
+			zero_ip = ipv4_addr_from_str("0.0.0.0");
+			con		= get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,
+													 dst_ip,
+													 zero_ip,
+													 dst_port,
+													 0);
+			free_ipv4_addr(zero_ip);
+			zero_ip = NULL;
+		}
 
 
 		// copied from udp.c
@@ -779,6 +786,8 @@ int tcp_pkt_rx(struct packet * pkt)
 			pet_printf("send syn-ack\n");
 			__send_syn_ack(con, src_ip, src_port);
 
+			con->snd_nxt = con->snd_nxt + 1;
+
 			// next state = we wait for ack to complete handshake
 			con->con_state = SYN_RCVD;
 		}
@@ -798,20 +807,44 @@ int tcp_pkt_rx(struct packet * pkt)
 
 		// now we wait for ack (after we just sent syn-ack)
 		if (con->con_state == SYN_RCVD && tcp_hdr->flags.ACK) {
-			struct socket * new_sock = NULL;
+			struct socket *			new_sock	 = NULL;
+			struct tcp_connection * new_con		 = NULL;
+			uint32_t				accepted_snd = con->snd_nxt;
 
-			con->snd_nxt	 = con->snd_nxt + 1;
-			con->con_state	 = ESTABLISHED;
-			con->remote_ip	 = ipv4_addr_clone(src_ip);
-			con->remote_port = src_port;
-			con->local_port	 = dst_port;
+			con->con_state = LISTEN;
+			con->snd_nxt   = 4242;
+			con->rcv_nxt   = 0;
+
+			new_con = create_ipv4_tcp_con(tcp_state->con_map,
+										  dst_ip,
+										  src_ip,
+										  dst_port,
+										  src_port);
+
+			if (new_con == NULL) {
+				log_error("Could not create new TCP connection for accepted client\n");
+				goto out;
+			}
+
+			new_con->con_state	 = ESTABLISHED;
+			new_con->snd_nxt	 = accepted_snd;
+			new_con->rcv_nxt	 = ntohl(tcp_hdr->ack_num);
+			new_con->snd_una	 = new_con->snd_nxt;
+			new_con->remote_ip	 = ipv4_addr_clone(src_ip);
+			new_con->remote_port = src_port;
+			new_con->local_port	 = dst_port;
+			new_con->timed_out	 = 0;
+			new_con->timeout	 = NULL;
 
 			new_sock = pet_socket_accepted(con->sock, src_ip, src_port);
 
 			if (new_sock != NULL) {
-				add_sock_to_tcp_con(tcp_state->con_map, con, new_sock);
+				add_sock_to_tcp_con(tcp_state->con_map, new_con, new_sock);
+				new_con->sock = new_sock;
 				pet_put_socket(new_sock);
 			}
+
+			put_and_unlock_tcp_con(new_con);
 
 			pet_printf("ack received, connection established\n");
 		}
@@ -881,6 +914,11 @@ int tcp_pkt_rx(struct packet * pkt)
 
 			pet_printf("received FIN, sent ACK, connection CLOSED\n");
 			goto out;
+		}
+
+		if (con->con_state == FIN_WAIT2 && pkt->payload_len > 0) {
+			con->rcv_nxt = con->rcv_nxt + pkt->payload_len;
+			__send_ack(con, src_ip, src_port);
 		}
 
 	out:
