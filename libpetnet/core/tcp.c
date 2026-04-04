@@ -28,6 +28,7 @@
 #include "socket.h"
 #include "timer.h"
 
+#define TIMEOUT_TIME_SEC 1
 
 extern int petnet_errno;
 
@@ -359,7 +360,7 @@ __send_data_pkt(struct tcp_connection * con)
 	}
 
 	con->timed_out = 0;
-	con->timeout   = pet_add_timeout(3, __retransmit_timeout, con);
+	con->timeout   = pet_add_timeout(TIMEOUT_TIME_SEC, __retransmit_timeout, con);
 	pet_printf("DEBUG3: __send_data_pkt: sent %u bytes, timer started\n", data_len);
 
 	return 0;
