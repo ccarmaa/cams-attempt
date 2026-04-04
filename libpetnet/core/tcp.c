@@ -116,6 +116,16 @@ __calculate_chksum(struct tcp_connection * con,
 	return checksum;
 }
 
+static void __retransmit_timeout(struct pet_timeout * timeout, void * arg)
+{
+	pet_printf("retransmit timeout fired!\n");
+	struct tcp_connection * con = (struct tcp_connection *)arg;
+	lock_tcp_con(con);
+	con->timed_out = 1;
+	unlock_tcp_con(con);
+}
+
+
 /// 5.) write helper function
 static int
 __send_syn_ack(struct tcp_connection * con,
@@ -297,7 +307,10 @@ __send_data_pkt(struct tcp_connection * con)
 	// checks how much data is waiting in sockets send buffer
 	data_len = pet_socket_send_capacity(con->sock);
 
+	pet_printf("DEBUG1: __send_data_pkt: data_len=%u snd_nxt=%u snd_una=%u timed_out=%d\n", data_len, con->snd_nxt, con->snd_una, con->timed_out);
+
 	if (data_len == 0) {
+		pet_printf("DEBUG2: __send_data_pkt: nothing to send\n");
 		return 0;
 	}
 
@@ -329,6 +342,8 @@ __send_data_pkt(struct tcp_connection * con)
 	// pulls data out of sockets send buff and copies it into packets payload
 	pet_socket_sending_data(con->sock, pkt->payload, data_len);
 
+	con->snd_una = con->snd_nxt;
+
 	// advances seq # by how many bytes we sent
 	con->snd_nxt = con->snd_nxt + data_len;
 
@@ -342,6 +357,10 @@ __send_data_pkt(struct tcp_connection * con)
 		log_error("Failed to send data packet\n");
 		goto err;
 	}
+
+	con->timed_out = 0;
+	con->timeout   = pet_add_timeout(3, __retransmit_timeout, con);
+	pet_printf("DEBUG3: __send_data_pkt: sent %u bytes, timer started\n", data_len);
 
 	return 0;
 
@@ -514,7 +533,9 @@ int tcp_listen(struct socket *	  sock,
 	// ready to receive incoming SYNs
 	con->con_state = LISTEN;
 	// set initial sequence number
-	con->snd_nxt = 4242;	// choosing something arbitrary for now
+	con->snd_nxt   = 4242;	  // choosing something arbitrary for now
+	con->timed_out = 0;
+	con->timeout   = NULL;
 
 	// unlock and release the reference before returning
 	put_and_unlock_tcp_con(con);
@@ -578,6 +599,8 @@ int tcp_connect_ipv4(struct socket *	sock,
 	con->remote_ip	 = ipv4_addr_clone(remote_addr);
 	con->remote_port = remote_port;
 	con->local_port	 = local_port;
+	con->timed_out	 = 0;
+	con->timeout	 = NULL;
 
 	__send_syn(con, remote_addr, remote_port);	  // send SYN to kick off the handshake
 
@@ -607,6 +630,12 @@ int tcp_send(struct socket * sock)
 	if (con == NULL) {
 		log_error("could not find TCP connection (called from tcp_send)\n");
 		return -1;
+	}
+
+	if (con->timed_out) {
+		pet_printf("retransmitting due to TIMEOUT!!\n");
+		con->snd_nxt   = con->snd_una;
+		con->timed_out = 0;
 	}
 
 	if (con->con_state != ESTABLISHED) {
@@ -807,11 +836,35 @@ int tcp_pkt_rx(struct packet * pkt)
 			pet_printf("received fin, sent fin+ack\n");
 		}
 
+		if (con->con_state == ESTABLISHED &&
+			tcp_hdr->flags.ACK &&
+			pkt->payload_len == 0 &&
+			!tcp_hdr->flags.FIN &&
+			!tcp_hdr->flags.SYN) {
+			if (con->timeout != NULL && con->timed_out == 0) {
+				pet_cancel_timeout(con->timeout);
+				con->timeout = NULL;
+			}
+		}
+
 		if (con->con_state == LAST_ACK && tcp_hdr->flags.ACK) {
+			struct socket *	   saved_sock = con->sock;
+			struct ipv4_addr * local_ip	  = ipv4_addr_clone(con->ipv4_tuple.local_ip);
+			uint16_t		   local_port = con->ipv4_tuple.local_port;
+
 			con->con_state = CLOSED;
+			con->sock	   = NULL;
 			remove_tcp_con(tcp_state->con_map, con);
-			pet_socket_closed(con->sock);
+			put_and_unlock_tcp_con(con);
+			con = NULL;
+
+			pet_socket_closed(saved_sock);
+			tcp_listen(saved_sock, local_ip, local_port);
+			free_ipv4_addr(local_ip);
+
+
 			pet_printf("final ack received, state -> CLOSED\n");
+			goto out;
 		}
 
 		if (con->con_state == FIN_WAIT1 && tcp_hdr->flags.ACK) {
@@ -820,12 +873,23 @@ int tcp_pkt_rx(struct packet * pkt)
 		}
 
 		if (con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN) {
+			struct socket *	   saved_sock = con->sock;
+			struct ipv4_addr * local_ip	  = ipv4_addr_clone(con->ipv4_tuple.local_ip);
+			uint16_t		   local_port = con->ipv4_tuple.local_port;
+
 			con->rcv_nxt = con->rcv_nxt + 1;
 			__send_ack(con, src_ip, src_port);
 			con->con_state = CLOSED;
+			con->sock	   = NULL;
 			remove_tcp_con(tcp_state->con_map, con);
-			pet_socket_closed(con->sock);
+			put_and_unlock_tcp_con(con);
+			con = NULL;
+
+			tcp_listen(saved_sock, local_ip, local_port);
+			free_ipv4_addr(local_ip);
+
 			pet_printf("received FIN, sent ACK, connection CLOSED\n");
+			goto out;
 		}
 
 	out:
