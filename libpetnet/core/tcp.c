@@ -902,6 +902,11 @@ int tcp_pkt_rx(struct packet * pkt)
 			pet_printf("FIN ACKed, moving to FIN_WAIT2\n");
 		}
 
+		if (con->con_state == FIN_WAIT2 && pkt->payload_len > 0) {
+			con->rcv_nxt = con->rcv_nxt + pkt->payload_len;
+			__send_ack(con, src_ip, src_port);
+		}
+
 		if (con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN) {
 			con->rcv_nxt = con->rcv_nxt + 1;
 			__send_ack(con, src_ip, src_port);
@@ -916,10 +921,6 @@ int tcp_pkt_rx(struct packet * pkt)
 			goto out;
 		}
 
-		if (con->con_state == FIN_WAIT2 && pkt->payload_len > 0) {
-			con->rcv_nxt = con->rcv_nxt + pkt->payload_len;
-			__send_ack(con, src_ip, src_port);
-		}
 
 	out:
 		if (con)
